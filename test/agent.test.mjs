@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 import { discordLog, openclawReply } from "../lib/agent.mjs";
 import { OPENCLAW_MAX_CONCURRENT, DISCORD_LOG_CHANNEL_ID } from "../lib/config.mjs";
+import { canonicalPluginSessionKey, resolvePluginSessionEntry } from "../lib/plugin-session-key.mjs";
 
 // ─── Helpers for plugin-path tests ───────────────────────────────────────────
 
@@ -131,7 +132,7 @@ describe("openclawReply — plugin path", () => {
 
     const call = /** @type {any[]} */ (deps.runEmbeddedPiAgent.mock.calls)[0].arguments[0];
     assert.strictEqual(call.agentId, "my-agent");
-    assert.strictEqual(call.sessionKey, "my-session");
+    assert.strictEqual(call.sessionKey, "agent:my-agent:my-session");
     assert.strictEqual(call.provider, "openai-codex");
     assert.strictEqual(call.model, "gpt-5.4");
     assert.ok(call.prompt.includes("<= 160 characters"), `unexpected prompt: ${call.prompt}`);
@@ -159,6 +160,7 @@ describe("openclawReply — plugin path", () => {
     const smsKey     = smsCalls[0].arguments[0].sessionKey;
 
     assert.strictEqual(voiceKey, smsKey, "voice and SMS must share the same session key");
+    assert.ok(voiceKey.startsWith("agent:"), `session key must be canonical, got ${voiceKey}`);
     assert.ok(!voiceKey.startsWith("voice:"), `session key must not have mode prefix, got ${voiceKey}`);
     assert.ok(!smsKey.startsWith("sms:"),     `session key must not have mode prefix, got ${smsKey}`);
   });
@@ -210,6 +212,43 @@ describe("openclawReply — plugin path", () => {
     const result = await openclawReply({ userText: "test", run: mockRun });
     assert.strictEqual(result, "CLI reply");
     assert.strictEqual(mockRun.mock.calls.length, 1);
+  });
+});
+
+describe("plugin session keys", () => {
+  it("canonicalizes plugin session keys for the selected agent", () => {
+    assert.strictEqual(canonicalPluginSessionKey("main", "phone"), "agent:main:phone");
+    assert.strictEqual(canonicalPluginSessionKey("Research", "phone"), "agent:research:phone");
+  });
+
+  it("migrates legacy bare plugin session keys into the canonical agent key", () => {
+    const store = {
+      phone: {
+        sessionId: "legacy-session",
+        updatedAt: 200,
+        thinkingLevel: "high",
+        systemPromptReport: {
+          sessionKey: "phone",
+        },
+      },
+      "agent:main:phone": {
+        sessionId: "canonical-session",
+        updatedAt: 100,
+        thinkingLevel: "low",
+      },
+    };
+
+    const { key, entry } = resolvePluginSessionEntry({
+      store,
+      agentId: "main",
+      sessionKey: "phone",
+    });
+
+    assert.strictEqual(key, "agent:main:phone");
+    assert.strictEqual(entry.sessionId, "legacy-session");
+    assert.strictEqual(entry.thinkingLevel, "high");
+    assert.strictEqual(store.phone, undefined);
+    assert.strictEqual(store["agent:main:phone"].systemPromptReport.sessionKey, "agent:main:phone");
   });
 });
 
